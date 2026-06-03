@@ -30,6 +30,7 @@ enum { CBM_DIR_PERMS = 0755, PL_RING = 4, PL_RING_MASK = 3, PL_SEQ_PASSES = 6, P
 #include "foundation/compat.h"
 #include "foundation/compat_thread.h"
 #include "foundation/profile.h"
+#include "foundation/mem.h"
 
 #include <stdint.h>
 #include <stdio.h>
@@ -571,6 +572,14 @@ static int run_parallel_pipeline(cbm_pipeline_t *p, cbm_pipeline_ctx_t *ctx,
         return rc != 0 ? rc : CBM_NOT_FOUND;
     }
     cbm_gbuf_set_next_id(p->gbuf, atomic_load(&shared_ids));
+    /* extract -> registry handoff: return the extract phase's freed-but-retained
+     * allocator pages to the OS before registry_build allocates. On a 2x Linux
+     * index the extract peak holds ~13 GB of reclaimable pages (peak_mb 20.7 vs
+     * live rss_mb 7); not returning them pushed the process over the system
+     * memory-pressure threshold and got it SIGKILLed at registry entry. */
+    cbm_mem_collect();
+    cbm_log_info("mem.collect", "phase", "post_extract", "rss_mb",
+                 itoa_buf((int)(cbm_mem_rss() / (1024 * 1024))));
     cbm_clock_gettime(CLOCK_MONOTONIC, t);
     rc = cbm_build_registry_from_cache(ctx, files, file_count, cache);
     cbm_log_info("pass.timing", "pass", "registry_build", "elapsed_ms",

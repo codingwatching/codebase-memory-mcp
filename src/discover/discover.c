@@ -310,13 +310,8 @@ static bool resolve_xdg_git_config_dir(char *out, size_t out_sz) {
     return out[0] != '\0';
 }
 
-static bool resolve_global_excludes_path(const char *repo_path, char *out, size_t out_sz) {
+static bool resolve_global_excludes_path(char *out, size_t out_sz) {
     char config_path[CBM_SZ_4K];
-
-    path_join(config_path, sizeof(config_path), repo_path, ".git/config");
-    if (read_core_excludes_file(config_path, out, out_sz)) {
-        return true;
-    }
 
     const char *home = cbm_get_home_dir();
     if (home && home[0] != '\0') {
@@ -783,7 +778,7 @@ int cbm_discover_ex(const char *repo_path, const cbm_discover_opts_t *opts, cbm_
     }
 
     cbm_gitignore_t *global_gi = NULL;
-    if (has_git_config && resolve_global_excludes_path(repo_path, gi_path, sizeof(gi_path))) {
+    if (has_git_config && resolve_global_excludes_path(gi_path, sizeof(gi_path))) {
         global_gi = cbm_gitignore_load(gi_path);
     }
 

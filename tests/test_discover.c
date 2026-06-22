@@ -446,6 +446,43 @@ TEST(discover_global_excludesfile_from_gitconfig_tilde) {
     PASS();
 }
 
+TEST(discover_repo_local_excludesfile_is_ignored) {
+    git_env_snapshot_t env = save_git_env();
+    char *tmp = th_mktempdir("cbm_disc_repo_cfg_ignored");
+    ASSERT(tmp != NULL);
+
+    char base[512], repo[512], home[512], secret[512], config[1024];
+    snprintf(base, sizeof(base), "%s", tmp);
+    snprintf(repo, sizeof(repo), "%s/repo", base);
+    snprintf(home, sizeof(home), "%s/home", base);
+    snprintf(secret, sizeof(secret), "%s/secret-ignore", home);
+    snprintf(config, sizeof(config), "[core]\n    excludesFile = %s\n", secret);
+
+    cbm_setenv("HOME", home, 1);
+    cbm_unsetenv("XDG_CONFIG_HOME");
+
+    th_mkdir_p(TH_PATH(repo, ".git"));
+    th_write_file(TH_PATH(repo, ".git/config"), config);
+    th_write_file(secret, "skip-me.go\n");
+    th_write_file(TH_PATH(repo, "keep.go"), "package keep\n");
+    th_write_file(TH_PATH(repo, "skip-me.go"), "package skip\n");
+
+    cbm_discover_opts_t opts = {0};
+    cbm_file_info_t *files = NULL;
+    int count = 0;
+
+    int rc = cbm_discover(repo, &opts, &files, &count);
+    ASSERT_EQ(rc, 0);
+    ASSERT_EQ(count, 2);
+    ASSERT_TRUE(discover_has_rel_path(files, count, "keep.go"));
+    ASSERT_TRUE(discover_has_rel_path(files, count, "skip-me.go"));
+
+    cbm_discover_free(files, count);
+    restore_git_env(&env);
+    th_cleanup(base);
+    PASS();
+}
+
 TEST(discover_missing_global_excludes_is_noop) {
     git_env_snapshot_t env = save_git_env();
     char *tmp = th_mktempdir("cbm_disc_global_missing");
@@ -967,6 +1004,7 @@ SUITE(discover) {
     RUN_TEST(discover_with_gitignore);
     RUN_TEST(discover_with_global_xdg_ignore);
     RUN_TEST(discover_global_excludesfile_from_gitconfig_tilde);
+    RUN_TEST(discover_repo_local_excludesfile_is_ignored);
     RUN_TEST(discover_missing_global_excludes_is_noop);
     RUN_TEST(discover_cbmignore_negates_global_ignore);
     RUN_TEST(discover_gitignore_dir_excluded_issue234);

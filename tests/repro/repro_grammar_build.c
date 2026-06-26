@@ -111,7 +111,7 @@
  *                       a named function_declaration body; may RED for resource_
  *                       declaration call sites (no enclosing function).
  *
- * Coding rule: inline comments are line comments only (no /* inside any comment).
+ * Coding rule: inline comments are line comments only (no nested block-comment opener).
  */
 
 #include "test_framework.h"

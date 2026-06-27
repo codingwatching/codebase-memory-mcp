@@ -1514,7 +1514,7 @@ static const char *wit_import_types[] = {
     "import_item", "toplevel_use_item", "export_item", "import", "include", "include_item", NULL};
 static const char *wit_module_types[] = {"source_file", NULL};
 static const char *tlaplus_func_types[] = {"operator_definition", "function_definition", NULL};
-static const char *tlaplus_call_types[] = {"function_evaluation", "call", NULL};
+static const char *tlaplus_call_types[] = {"function_evaluation", "call", "bound_op", NULL};
 static const char *tlaplus_import_types[] = {"extends", "instance", NULL};
 static const char *tlaplus_branch_types[] = {"if_then_else", "case", NULL};
 static const char *tlaplus_var_types[] = {"variable_declaration", NULL};

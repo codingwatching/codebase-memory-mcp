@@ -3057,11 +3057,11 @@ static void extract_class_def(CBMExtractCtx *ctx, TSNode node, const CBMLangSpec
             name_node = cbm_find_child_by_kind(node, "enum_name");
         }
     }
-    // Thrift / Smithy / Pony (no `name` field): class-type defs carry the name on
-    // a plain `identifier` child.
+    // Thrift / Smithy / Pony / PKL (no `name` field): class-type defs carry the
+    // name on a plain `identifier` child (PKL `clazz` -> `(identifier) (classBody)`).
     if (ts_node_is_null(name_node) &&
         (ctx->language == CBM_LANG_THRIFT || ctx->language == CBM_LANG_SMITHY ||
-         ctx->language == CBM_LANG_PONY)) {
+         ctx->language == CBM_LANG_PONY || ctx->language == CBM_LANG_PKL)) {
         name_node = cbm_find_child_by_kind(node, "identifier");
     }
     // F#: type_definition wraps an `anon_type_defn` (or similar) whose
@@ -3429,6 +3429,27 @@ static TSNode find_class_body(TSNode class_node, CBMLanguage lang) {
     if (lang == CBM_LANG_SQUIRREL) {
         return class_node;
     }
+    // Smali: field_definition nodes are direct children of class_definition (no
+    // dedicated body node) — iterate the class node itself.
+    if (lang == CBM_LANG_SMALI) {
+        return class_node;
+    }
+    // GraphQL: object/interface fields live in a fields_definition child.
+    if (lang == CBM_LANG_GRAPHQL) {
+        TSNode b = cbm_find_child_by_kind(class_node, "fields_definition");
+        if (!ts_node_is_null(b)) {
+            return b;
+        }
+    }
+    // Prisma: model columns live in a statement_block child. Gated to Prisma so
+    // the common "statement_block" kind can never hijack another language's
+    // class body via the generic fallback below.
+    if (lang == CBM_LANG_PRISMA) {
+        TSNode b = cbm_find_child_by_kind(class_node, "statement_block");
+        if (!ts_node_is_null(b)) {
+            return b;
+        }
+    }
     // Fallback: search children for known body node types
     static const char *body_types[] = {"class_body",
                                        "interface_body",
@@ -3525,6 +3546,15 @@ static TSNode resolve_method_name(TSNode child, CBMLanguage lang) {
     }
 
     if (lang == CBM_LANG_OBJC && strcmp(ck, "method_definition") == 0) {
+        return cbm_find_child_by_kind(child, "identifier");
+    }
+
+    // Pony: `fun`/`be`/`new` members are `method`/`constructor`/`ffi_method`
+    // nodes with no `name` field; the name is the first plain `identifier` child
+    // (mirrors the free-function case in cbm_resolve_func_name).
+    if (lang == CBM_LANG_PONY &&
+        (strcmp(ck, "method") == 0 || strcmp(ck, "constructor") == 0 ||
+         strcmp(ck, "ffi_method") == 0)) {
         return cbm_find_child_by_kind(child, "identifier");
     }
 
@@ -4586,6 +4616,34 @@ static void extract_var_names(CBMExtractCtx *ctx, TSNode node, const CBMLangSpec
     case CBM_LANG_SCSS:
         extract_vars_config(ctx, node, a, kind);
         return;
+    /* Dockerfile: `ENV K=V ...` is an env_instruction holding one or more
+     * env_pair children, each with a `name` field; `ARG K=V` is an
+     * arg_instruction whose name is the first unquoted_string child. The default
+     * fallback misses both (no `name` field on the instruction, child is an
+     * env_pair rather than a bare identifier). */
+    case CBM_LANG_DOCKERFILE:
+        if (strcmp(kind, "env_instruction") == 0) {
+            uint32_t ec = ts_node_named_child_count(node);
+            for (uint32_t i = 0; i < ec; i++) {
+                TSNode pair = ts_node_named_child(node, i);
+                if (strcmp(ts_node_type(pair), "env_pair") != 0) {
+                    continue;
+                }
+                TSNode nm = ts_node_child_by_field_name(pair, TS_FIELD("name"));
+                if (!ts_node_is_null(nm)) {
+                    push_var_def(ctx, cbm_node_text(a, nm, ctx->source), pair);
+                }
+            }
+        } else if (strcmp(kind, "arg_instruction") == 0) {
+            TSNode nm = ts_node_child_by_field_name(node, TS_FIELD("name"));
+            if (ts_node_is_null(nm)) {
+                nm = cbm_find_child_by_kind(node, "unquoted_string");
+            }
+            if (!ts_node_is_null(nm)) {
+                push_var_def(ctx, cbm_node_text(a, nm, ctx->source), node);
+            }
+        }
+        return;
     default:
         break;
     }
@@ -4812,6 +4870,58 @@ static TSNode resolve_field_name_node(TSNode child) {
     return name_node;
 }
 
+/* Schema/grammar languages whose field node carries the field name on a plain
+ * child (no C-style `declarator`/`type` field), so the generic field path below
+ * skips them. Emit a "Field" def (with optional return_type) and return true if
+ * handled. GraphQL: field_definition (name)(type:named_type); Prisma:
+ * column_declaration (identifier)(column_type); Smali: field_definition
+ * (field_identifier)(field_type). */
+static bool extract_schema_field(CBMExtractCtx *ctx, TSNode child, const char *class_qn) {
+    CBMArena *a = ctx->arena;
+    TSNode name_node = {0};
+    TSNode type_node = {0};
+
+    if (ctx->language == CBM_LANG_GRAPHQL) {
+        name_node = ts_node_child_by_field_name(child, TS_FIELD("name"));
+        if (ts_node_is_null(name_node)) {
+            name_node = cbm_find_child_by_kind(child, "name");
+        }
+        type_node = ts_node_child_by_field_name(child, TS_FIELD("type"));
+    } else if (ctx->language == CBM_LANG_PRISMA) {
+        name_node = cbm_find_child_by_kind(child, "identifier");
+        type_node = cbm_find_child_by_kind(child, "column_type");
+    } else if (ctx->language == CBM_LANG_SMALI) {
+        name_node = cbm_find_child_by_kind(child, "field_identifier");
+        type_node = cbm_find_child_by_kind(child, "field_type");
+    } else {
+        return false;
+    }
+
+    if (ts_node_is_null(name_node)) {
+        return true; // language matched but no name → nothing to emit
+    }
+    char *name = cbm_node_text(a, name_node, ctx->source);
+    if (!name || !name[0]) {
+        return true;
+    }
+
+    CBMDefinition def;
+    memset(&def, 0, sizeof(def));
+    def.name = name;
+    def.qualified_name = cbm_arena_sprintf(a, "%s.%s", class_qn, name);
+    def.label = "Field";
+    def.file_path = ctx->rel_path;
+    def.parent_class = class_qn;
+    if (!ts_node_is_null(type_node)) {
+        def.return_type = cbm_node_text(a, type_node, ctx->source);
+    }
+    def.start_line = ts_node_start_point(child).row + TS_LINE_OFFSET;
+    def.end_line = ts_node_end_point(child).row + TS_LINE_OFFSET;
+    def.is_exported = cbm_is_exported(name, ctx->language);
+    cbm_defs_push(&ctx->result->defs, a, def);
+    return true;
+}
+
 static void extract_class_fields(CBMExtractCtx *ctx, TSNode class_node, const char *class_qn,
                                  const CBMLangSpec *spec) {
     if (!spec->field_node_types || !spec->field_node_types[0]) {
@@ -4832,6 +4942,13 @@ static void extract_class_fields(CBMExtractCtx *ctx, TSNode class_node, const ch
         }
 
         if (is_func_ptr_field(child)) {
+            continue;
+        }
+
+        /* Schema/grammar languages (GraphQL/Prisma/Smali) carry the field name on
+         * a plain child rather than a C-style declarator/type field; handle them
+         * up front so the generic "type"-field path below doesn't skip them. */
+        if (extract_schema_field(ctx, child, class_qn)) {
             continue;
         }
 

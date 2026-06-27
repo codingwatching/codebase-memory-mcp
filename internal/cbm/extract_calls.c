@@ -502,6 +502,17 @@ static char *extract_fsharp_callee(CBMArena *a, TSNode node, const char *source,
     return NULL;
 }
 
+// CSS: a `call_expression` (e.g. `url(...)`, `calc(...)`) carries its callee on a
+// plain `function_name` child rather than a `function`/`name` field, so generic
+// field/first-child resolution misses it.
+static char *extract_css_callee(CBMArena *a, TSNode node, const char *source, const char *nk) {
+    if (strcmp(nk, "call_expression") != 0) {
+        return NULL;
+    }
+    TSNode fn = cbm_find_child_by_kind(node, "function_name");
+    return ts_node_is_null(fn) ? NULL : cbm_node_text(a, fn, source);
+}
+
 // PowerShell: a `command` node's callee is its `command_name` child.
 static char *extract_powershell_callee(CBMArena *a, TSNode node, const char *source,
                                        const char *nk) {
@@ -693,6 +704,10 @@ static char *extract_callee_lang_specific(CBMArena *a, TSNode node, const char *
 
     if (lang == CBM_LANG_SCSS) {
         char *c = extract_scss_callee(a, node, source, nk);
+        return c ? c : extract_scripting_callee(a, node, source, lang, nk);
+    }
+    if (lang == CBM_LANG_CSS) {
+        char *c = extract_css_callee(a, node, source, nk);
         return c ? c : extract_scripting_callee(a, node, source, lang, nk);
     }
     if (lang == CBM_LANG_SQL) {

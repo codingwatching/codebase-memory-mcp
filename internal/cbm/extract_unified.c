@@ -348,6 +348,38 @@ static const char *compute_func_qn(CBMExtractCtx *ctx, TSNode node, const CBMLan
         }
     }
 
+    /* Agda: a definition is two `function` nodes — the type signature
+     * (`compute : Nat -> Nat`, lhs has a `function_name` child that names the
+     * def) and the body clause (`compute x = add x 1`, lhs has no function_name).
+     * The shared resolver deliberately returns NULL for the body clause to avoid
+     * a duplicate def, so an in-body call would source to the Module. Resolve the
+     * body clause's name here (call-scope only) from the lhs head identifier so
+     * the call attributes to the function. */
+    if (ctx->language == CBM_LANG_AGDA && strcmp(ts_node_type(node), "function") == 0) {
+        TSNode lhs = cbm_find_child_by_kind(node, "lhs");
+        if (!ts_node_is_null(lhs)) {
+            TSNode nm = cbm_find_child_by_kind(lhs, "function_name");
+            if (ts_node_is_null(nm)) {
+                /* Body clause: descend to the first leaf of the lhs (`compute x`
+                 * -> the head `compute`). */
+                TSNode cur = lhs;
+                for (int hop = 0;
+                     hop < 8 && !ts_node_is_null(cur) && ts_node_named_child_count(cur) > 0;
+                     hop++) {
+                    cur = ts_node_named_child(cur, 0);
+                }
+                nm = cur;
+            }
+            if (!ts_node_is_null(nm)) {
+                char *name = cbm_node_text(ctx->arena, nm, ctx->source);
+                if (name && name[0]) {
+                    return cbm_fqn_compute_source_lang(ctx->arena, ctx->project, ctx->rel_path,
+                                                       name, ctx->language);
+                }
+            }
+        }
+    }
+
     /* Resolve the function name via the single shared resolver (extract_defs) so
      * call-scope attribution agrees with definition extraction across all ~130
      * grammars. The old private 4-case copy returned NULL for Fortran subroutine,

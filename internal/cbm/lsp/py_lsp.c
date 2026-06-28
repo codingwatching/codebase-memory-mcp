@@ -324,8 +324,9 @@ static const char *py_lookup_dict_dispatch(PyLSPContext *ctx, const char *var, c
     return NULL;
 }
 
-static void py_emit_resolved_call(PyLSPContext *ctx, const char *callee_qn, const char *strategy,
-                                  float confidence) {
+static void py_emit_resolved_call_reason(PyLSPContext *ctx, const char *callee_qn,
+                                         const char *strategy, float confidence,
+                                         const char *reason) {
     if (!ctx || !ctx->resolved_calls || !callee_qn || !ctx->enclosing_func_qn)
         return;
     // Dedupe by (caller, callee). Bounded-window scan: most duplicate
@@ -354,7 +355,13 @@ static void py_emit_resolved_call(PyLSPContext *ctx, const char *callee_qn, cons
     rc.callee_qn = cbm_arena_strdup(ctx->arena, callee_qn);
     rc.strategy = strategy;
     rc.confidence = confidence;
+    rc.reason = reason ? cbm_arena_strdup(ctx->arena, reason) : NULL;
     cbm_resolvedcall_push(ctx->resolved_calls, ctx->arena, rc);
+}
+
+static void py_emit_resolved_call(PyLSPContext *ctx, const char *callee_qn, const char *strategy,
+                                  float confidence) {
+    py_emit_resolved_call_reason(ctx, callee_qn, strategy, confidence, NULL);
 }
 
 /* ── helpers: registry-driven attribute lookup with depth cap ──── */
@@ -1664,7 +1671,10 @@ static void py_emit_call_for(PyLSPContext *ctx, TSNode call_node) {
             if (var_name && k_text) {
                 const char *tgt = py_lookup_dict_dispatch(ctx, var_name, k_text);
                 if (tgt) {
-                    py_emit_resolved_call(ctx, tgt, "lsp_dict_dispatch", 0.86f);
+                    /* The textual callee of `funcs["a"](v)` is the subscript base
+                     * identifier ("funcs"), not the resolved target ("foo"), so
+                     * stash it in `reason` for the join (see lsp_resolve.h). */
+                    py_emit_resolved_call_reason(ctx, tgt, "lsp_dict_dispatch", 0.86f, var_name);
                     return;
                 }
             }

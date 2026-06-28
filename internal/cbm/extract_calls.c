@@ -983,6 +983,25 @@ static char *extract_callee_lang_specific(CBMArena *a, TSNode node, const char *
                                           CBMLanguage lang) {
     const char *nk = ts_node_type(node);
 
+    /* Python dict-dispatch call `funcs["a"](v)`: the call's `function` field is a
+     * subscript whose base is the identifier holding the dispatch table. Emit the
+     * base identifier ("funcs") as the textual callee so a CALLS edge exists; the
+     * py-LSP resolves it to the real target and joins via `reason` (lsp_resolve.h,
+     * lsp_dict_dispatch). Gated to the literal-string-key shape the LSP handles so
+     * other subscript calls (arr[i]()) are unaffected. */
+    if (lang == CBM_LANG_PYTHON && strcmp(nk, "call") == 0) {
+        TSNode fnf = ts_node_child_by_field_name(node, TS_FIELD("function"));
+        if (!ts_node_is_null(fnf) && strcmp(ts_node_type(fnf), "subscript") == 0) {
+            TSNode val = ts_node_child_by_field_name(fnf, TS_FIELD("value"));
+            TSNode idx = ts_node_child_by_field_name(fnf, TS_FIELD("subscript"));
+            if (!ts_node_is_null(val) && !ts_node_is_null(idx) &&
+                strcmp(ts_node_type(val), "identifier") == 0 &&
+                strcmp(ts_node_type(idx), "string") == 0) {
+                return cbm_node_text(a, val, source);
+            }
+        }
+    }
+
     if (lang == CBM_LANG_JSONNET) {
         char *c = extract_jsonnet_callee(a, node, source, nk);
         return c ? c : extract_scripting_callee(a, node, source, lang, nk);
